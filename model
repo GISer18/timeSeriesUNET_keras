@@ -1,0 +1,98 @@
+import numpy as np 
+import os
+import skimage.io as io
+import skimage.transform as trans
+import numpy as np
+from keras.models import *
+from keras.layers import *
+from keras.optimizers import *
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras import backend as keras
+
+def DRIB(tensor_input,filters,kernel_size=1,pooling_size=1,dropout=0.5):
+    # Defines a diluted residual inception block
+    # This block is fixed at four levels named a,b,c,d
+    
+    filts = int(filters/4)
+
+    a1 = Conv1D(filts,1)(tensor_input)
+    a2 = BatchNormalization()(a1)
+
+    
+    b1 = Conv1D(filts,1)(tensor_input)
+    b2 = BatchNormalization()(b1)
+    b3 = ReLU()(b2)
+    b4 = Conv1D(filts,3, padding = 'same',dilation_rate = 2)(b3)
+    b5 = BatchNormalization()(b4)
+
+    
+    c1 = Conv1D(filts,1)(tensor_input)
+    c2 = BatchNormalization()(c1)
+    c3 = ReLU()(c2)
+    c4 = Conv1D(filts,3, padding = 'same',dilation_rate = 4)(c3)
+    c5 = BatchNormalization()(c4)
+
+    
+    d1 = Conv1D(filts,1)(tensor_input)
+    d2 = BatchNormalization()(d1)
+    d3 = ReLU()(d2)
+    d4 = Conv1D(filts,3, padding = 'same',dilation_rate = 8)(d3)
+    d5 = BatchNormalization()(d4)
+    
+    merge1 = concatenate([a2, b5, c5, d5], axis = 2)
+
+    out = Add()([tensor_input,merge1])
+
+    return out
+
+def unet(pretrained_weights = None,input_size = (200,1),windowSize=200):
+    # This is the top level defines the UNET architecture
+    
+    inputs = Input(input_size)
+
+    n=7 # number of filters. This should be pushed back to a parameter.
+
+    conv1 = Conv1D(filters=int(8*n), kernel_size=4, strides=2, padding="same")(inputs) # [200,16]
+    bn1 = BatchNormalization()(conv1)
+    r1 = LeakyReLU(alpha=0.2)(bn1)
+    
+    conv2 = Conv1D(filters=int(16*n), kernel_size=4, strides=2, padding="same")(r1)               # [100,32]
+    bn2 = BatchNormalization()(conv2)
+    r2 = LeakyReLU(alpha=0.2)(bn2)
+    
+    conv3 = Conv1D(filters=int(32*n), kernel_size=4, strides=2, padding="same")(r2)               # [50,64]
+
+    drib1 = DRIB(conv3,32*n)
+    u6 = UpSampling1D(size = 2)(drib1)
+    u6 = concatenate([u6, conv2])
+    c6 = Conv1D( filters=int(16*n), kernel_size=1, strides=1, activation = 'relu')(u6) #, activation = 'sigmoid'
+    
+    drib2 = DRIB(c6,16*n)
+    u7 = UpSampling1D(size = 2)(drib2)
+    u7 = concatenate([u7, conv1])
+    c7 = Conv1D( filters=int(8*n), kernel_size=1, strides=1, activation = 'relu')(u7)
+    
+    drib5 = DRIB(c7,8*n)
+    u10 = UpSampling1D(size = 2)(drib5)
+    c10 = Conv1D( filters=int(1), kernel_size=1, strides=1, activation = 'relu')(u10) #, activation='sigmoid'
+    
+    #print('start', inputs.get_shape())
+    #print('conv1', conv1.get_shape())
+    #print('conv2', conv2.get_shape())
+    #print('conv3', conv3.get_shape())
+    #print('c6', c6.get_shape())
+    #print('c7', c7.get_shape())
+
+
+
+   
+    flat1 = Flatten()(c10)
+    flat1 = Dense(152,activation='relu')(flat1)
+    model = Model(input = inputs, output = flat1)
+
+    
+    if(pretrained_weights):
+        model.load_weights(pretrained_weights)
+
+    return model
+
